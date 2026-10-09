@@ -1,0 +1,123 @@
+G1HW2 로그 명세
+
+1. 공통 형식
+[HH:mm:ss.SSS] NODE | EVENT | STATUS | key=value ...
+시각: 각 노드의 실제 KST(Asia/Seoul)
+NODE: SERVER / CLIENT1~CLIENT30 / 사후 검증용 VERIFIER
+STATUS: SUCCESS / FAIL / INFO / WARN
+WAITLISTED: 첫 응답 결과값 / 로그 STATUS는 INFO
+키·이벤트·상태값: 실제 프로그램 표기 유지
+
+2. 기본 이벤트
+INIT / INFO
+  run, profile, clients, requests, minMs, maxMs, port, timezone, sha256, java, os 기록
+  Server: workers, listener, notifier, monitor, seats, queueLimit, bind, standby
+  Client: client, seed, host
+  standby=true: 첫 유효 HELLO의 run 채택 / 회차별 로그 생성
+
+CONNECT / INFO·SUCCESS·WARN
+  Server INFO: phase=ACCEPT, peer / HELLO 식별 후 예매 연결 수락 기록
+  Server SUCCESS: phase=HELLO, client / Client 식별
+  Client SUCCESS: client, type=HELLO / 접속 식별 전송
+  Server WARN: phase=REJECT, peer, reason / 식별 전 무효 연결만 종료
+
+RESERVE / SUCCESS·FAIL·INFO
+  client, req, result / 단일 예약 첫 응답
+  Server 추가: op, seats / WAITLISTED 결과의 STATUS는 INFO
+
+RESERVE_MULTI / SUCCESS·FAIL
+  client, req, result / 다중 예약 첫 응답
+  Server 추가: op, seats / 전체 배정 또는 변경 없는 전체 실패
+
+CANCEL / SUCCESS·FAIL
+  client, req, result / 취소 첫 응답
+  Server 추가: op, seats / 대기자 인계 통지는 별도 NOTIFY
+
+LOCK / INFO
+  client, req, op, seats, acquired / 실제 획득 좌석의 오름차순
+  좌석 Lock 해제 후 기록 / 인자 오류 요청의 Lock 획득·LOCK 기록 없음
+
+WAITLIST / SUCCESS
+  client, req, op, seats, seat, seq, before, after, version, action, waitClient, waitReq
+  action=WAITLIST / 좌석별 FIFO 등록, 원래 예약 요청 식별
+
+NOTIFY / SUCCESS
+  client, req, seat, version / Server 통지 송신 또는 Client 수신
+  req: 원래 RESERVE 요청 번호 / Server 추가: waitNs
+  waitNs: Server 대기 등록~통지 송신 완료의 경과시간
+
+POOL / INFO
+  queue, active, processed, maxQueue, seats, snapshot
+  5초 주기: 100석 소유·대기 수, Queue 길이, 처리 중 Worker 수, 누적 첫 응답
+  seats: seat:owner:대기수 목록 / snapshot=per-seat: 좌석별 관측값
+
+DOUBLE_BOOKING_CHECK / INFO
+  scope=server_final, balance=PASS, client_log_verification=PENDING
+  Server 최종 배정·해제 수지 검사 / 전체 Client 정합성은 사후 검증
+
+TERMINATE / SUCCESS·FAIL
+  SUCCESS: execution=COMPLETE / 정상 종료
+  Server: client_log_verification=PENDING, appThreads / 자원 정리·Thread join 완료
+  Client: client / 전체 첫 응답·BYE 수신 후 종료
+  FAIL: reason / Server 추가: firstResponses, outstanding
+
+3. 추가 이벤트
+SEND / INFO
+  client, req, op, seats, delayMs, sentNs, gapNs
+  Client 요청 송신 직전 기록 / 선택 간격·단조 시각·이전 요청과의 간격
+
+RESPONSE / SUCCESS·FAIL·INFO
+  client, req, op, seats, result, reason, states / 첫 응답 내용
+  Client 추가: elapsedNs / 송신 직전~첫 응답 수신의 경과시간
+  Server: 전체 응답 프레임 송신 후 기록 / WAITLISTED의 STATUS는 INFO
+
+AUDIT / INFO
+  client, req, op, seats, seat, seq, before, after, version, action, waitClient, waitReq
+  좌석별 불변 전이 기록 / action: ASSIGN·WAITLIST·RELEASE·HANDOFF
+  seq: 좌석 상태 전이 순서 / before·after: 변경 전후 owner
+
+STAT / INFO
+  Server FINAL_SEAT: seat, owner, version, seq, waiting, assigned, released
+  Server SUMMARY: firstResponses, notify, unresolved, assigned, released, occupied,
+                  maxQueue, contention, deadlocks, elapsedNs, throughput, meanWaitSec
+  Server EXECUTION_DRAINED: client_log_verification=PENDING / 회차 처리 완료
+  Client FINAL: client, sent, firstResponses, notify, unresolved, held, responseNs
+  held: 최종 보유 좌석 / responseNs: 첫 응답 경과시간 합계
+
+PROTOCOL / INFO·SUCCESS
+  INFO type=READY: appThreads, port / Server 준비 상태
+  INFO direction=IN: client, req, op, seats / 요청 수신·파싱
+  SUCCESS type=BYE: client, unresolved / 종료 신호 송신·수신
+  대기 모드 READY: 회차 확정 후 기록 / 이전 대기 출력은 콘솔 전용
+  ERROR 프레임: 실행 실패 처리, TERMINATE FAIL 기록
+
+HEALTH / FAIL
+  queue, active, completed, outstanding, reason=NO_PROGRESS_30S
+  Monitor의 요청 대기·처리 중 30초 진행 정체 진단
+
+VERIFY / SUCCESS·FAIL
+  NODE=VERIFIER, phase=post-run, result, run, error
+  수집본 Server.txt에 추가한 사후 검증 결과 / 원격 실행·첫 응답 집계에서 제외
+
+4. 상태·집계·기타 기록
+좌석 상태: seat:version:owner 목록 또는 '-' / owner=0: EMPTY
+최종 대기 목록: client:req 목록 또는 '-' / FIFO 순서
+첫 응답: SUCCESS+FAIL+WAITLISTED / HELLO·NOTIFY·BYE 제외
+정합성: 배정−해제=점유, Server owner=Client 보유, WAITLISTED=수신 NOTIFY+미해결
+동시 전이 순서: 좌석별 seq 기준 / 파일 기록 순서와 구분
+verification.txt: key=value 형식의 별도 검증 보고서
+
+대기 콘솔:
+  SERVER WAITING: 회차 시작 전 대기
+  SERVER SESSION: 첫 유효 HELLO로 회차 확정
+  SERVER REJECT: 회차 시작 전 식별되지 않은 무효 접속 거부
+회차 시작 전 무효 접속: 회차 로그·처리량 시작에서 제외
+정상 회차 종료: systemd Restart=on-success / 새 상태·새 회차 로그로 재시작
+
+로그 수집 콘솔(회차 로그·성능 지표에서 제외):
+  SERVER LOG BEGIN: 완료 파일 송신 시작, run
+  SERVER LOG ERROR: 요청 거부, reason=INVALID_RUN·NOT_READY·NOT_FOUND·BUSY
+  SERVER LOG SENT: 원본 바이트 송신 완료, bytes / 수신 검사는 로컬 담당
+  SERVER LOG FAIL: 송신 중단·시간 초과 / 해당 수집 연결만 종료
+수집 표식: GET_LOG·LOG_BEGIN·LOG_END·LOG_ERROR / Readme의 별도 TCP 형식
+수집 결과: 로컬 콘솔의 크기·SHA-256 확인 / 예매 종료 성공과 수집·검증 결과 구분

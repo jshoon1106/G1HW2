@@ -1,0 +1,6 @@
+secrets/
+out/
+logs/
+temp/
+*.zip
+tests/
