@@ -1,7 +1,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Check','Build','Server','Clients','Collect','Verify','Package')]
+    [ValidateSet('Check','Build','Server','Clients','Collect','Verify')]
     [string]$Action = 'Check',
     [string]$RunId,
     [Alias('Profile')][ValidateSet('final','dev')][string]$RunProfile = 'final',
@@ -153,39 +153,6 @@ function Check-Environment {
     Write-Host 'No network connection or booking request was made.'
 }
 
-function Package-Project {
-    Require-Run
-    if ($RunProfile -ne 'final') { throw 'Only verified final logs may be submitted.' }
-    $g1Logs = Get-LogPath
-    Verify-Logs -Directory $g1Logs -VerifyProfile 'final'
-    $g1First = Get-Content -LiteralPath (Join-Path $g1Logs 'Server.txt') -Encoding utf8 -TotalCount 1
-    if ($g1First -notmatch 'sha256=([0-9a-f]{64})' -or $Matches[1] -ne (Get-FileHash -LiteralPath $g1Jar -Algorithm SHA256).Hash.ToLowerInvariant()) { throw 'Current JAR differs from final-run JAR.' }
-    foreach ($g1Required in @('Readme.txt','AllDefinedLogs.txt','download.txt')) { if (-not (Test-Path -LiteralPath (Join-Path $g1Root $g1Required))) { throw "Missing $g1Required" } }
-    $g1Readme = Get-Content -LiteralPath (Join-Path $g1Root 'Readme.txt') -Raw -Encoding utf8
-    if ($g1Readme -match 'PENDING|미확인|미완료') { throw 'Complete the actual environment, roles and final measurements in Readme.txt.' }
-    $g1VideoLink = (Get-Content -LiteralPath (Join-Path $g1Root 'download.txt') -Raw -Encoding utf8).Trim()
-    if ($g1VideoLink -notmatch '^https://\S+$') { throw 'download.txt must contain one working HTTPS video download link.' }
-    $g1VideoResponse = Invoke-WebRequest -Uri $g1VideoLink -Method Head -MaximumRedirection 5 -TimeoutSec 20
-    if ($g1VideoResponse.StatusCode -lt 200 -or $g1VideoResponse.StatusCode -ge 400) { throw 'Video link is not accessible.' }
-    $g1Package = Join-Path $g1Root "out/package/$RunId"
-    if (Test-Path -LiteralPath $g1Package) { throw 'Package staging already exists; retain it and use a new package directory after review.' }
-    New-Item -ItemType Directory -Path $g1Package -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $g1Root 'src') -Destination $g1Package -Recurse
-    foreach ($g1File in @('seat-booking.jar','project.ps1','AllDefinedLogs.txt','Readme.txt','download.txt')) { Copy-Item -LiteralPath (Join-Path $g1Root $g1File) -Destination $g1Package }
-    Copy-Item -LiteralPath (Join-Path $g1Logs 'Server.txt'),(Join-Path $g1Logs 'verification.txt') -Destination $g1Package
-    for ($g1Client = 1; $g1Client -le 30; $g1Client++) { Copy-Item -LiteralPath (Join-Path $g1Logs "Client$g1Client.txt") -Destination $g1Package }
-    $g1Zip = Join-Path $g1Root 'G1HW2.zip'
-    if (Test-Path -LiteralPath $g1Zip) { throw 'G1HW2.zip already exists; retain the previous submission rather than overwrite it.' }
-    Compress-Archive -Path (Join-Path $g1Package '*') -DestinationPath $g1Zip -CompressionLevel Optimal
-    $g1Unpacked = Join-Path $g1Root ('out/unpacked-' + [Guid]::NewGuid().ToString('N'))
-    Expand-Archive -LiteralPath $g1Zip -DestinationPath $g1Unpacked
-    & (Join-Path $g1Unpacked 'project.ps1') -Action Build
-    if ($LASTEXITCODE -ne 0) { throw 'Extracted sources failed to build.' }
-    & (Join-Path $g1Unpacked 'project.ps1') -Action Check
-    if ($LASTEXITCODE -ne 0) { throw 'Extracted execution requirements failed.' }
-    Write-Host "Submission validated: $g1Zip"
-}
-
 Push-Location $g1Root
 try {
     if ($Action -ne 'Check' -and -not $g1Java) { throw 'Java 17 or newer is required on PATH.' }
@@ -210,7 +177,6 @@ try {
         }
         'Collect' { Collect-ServerLog }
         'Verify' { Require-Run; Verify-Logs -Directory (Get-LogPath) -VerifyProfile $RunProfile }
-        'Package' { Package-Project }
     }
 }
 catch { Write-Error -Message $_ -ErrorAction Continue; exit 1 }

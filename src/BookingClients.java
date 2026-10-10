@@ -9,11 +9,11 @@ import java.util.concurrent.atomic.*;
 /** Thirty independent logical clients, each with a sender and a receiver. */
 public final class BookingClients {
     record Pending(int id,String op,int[] seats,long sentNs,int delayMs) {}
-    record FinalState(int responses,int notifications,int unresolved,int[] held,long responseNs) {}
+    record FinalState(int responses,int notifications,int unresolved,int[] held,long responseNs,int success,int fail,int waitlisted) {}
     static final class ClientState {
         final int id;final Pending[] requests;final BitSet responded=new BitSet(),waitlisted=new BitSet(),notified=new BitSet();
         final long[] versions=new long[Shared.SEATS+1];final int[] owners=new int[Shared.SEATS+1];
-        final TreeMap<Integer,Long> held=new TreeMap<>();final Map<Integer,Integer> cancelling=new HashMap<>();long responseNs;
+        final TreeMap<Integer,Long> held=new TreeMap<>();final Map<Integer,Integer> cancelling=new HashMap<>();long responseNs;int success,fail;
         ClientState(int id,int count){this.id=id;requests=new Pending[count+1];}
         synchronized void register(Pending p){if(requests[p.id()]!=null)throw new IllegalStateException("Duplicate local request");requests[p.id()]=p;if(p.op().equals("CANCEL"))cancelling.put(p.seats()[0],p.id());}
         synchronized List<Integer> cancellable(){return held.keySet().stream().filter(n->!cancelling.containsKey(n)).toList();}
@@ -31,6 +31,7 @@ public final class BookingClients {
             else if(notified.get(req))throw new IllegalStateException("NOTIFY without WAITLISTED");
             boolean grant=result.equals("SUCCESS")&&!p.op().equals("CANCEL");for(Shared.State state:states)apply(state,grant);
             if(p.op().equals("CANCEL"))cancelling.remove(p.seats()[0],req);
+            if(result.equals("SUCCESS"))success++;else if(result.equals("FAIL"))fail++;
             responded.set(req);responseNs+=now-p.sentNs();return p;
         }
         synchronized Pending notification(int req,int seat,long version) {
@@ -40,7 +41,7 @@ public final class BookingClients {
             notified.set(req);apply(new Shared.State(seat,version,id),true);return p;
         }
         synchronized Pending request(int req){if(req<1||req>=requests.length||requests[req]==null)throw new IllegalArgumentException("Unknown req id");return requests[req];}
-        synchronized FinalState snapshot(){BitSet unresolved=(BitSet)waitlisted.clone();unresolved.andNot(notified);return new FinalState(responded.cardinality(),notified.cardinality(),unresolved.cardinality(),held.keySet().stream().mapToInt(Integer::intValue).toArray(),responseNs);}
+        synchronized FinalState snapshot(){BitSet unresolved=(BitSet)waitlisted.clone();unresolved.andNot(notified);return new FinalState(responded.cardinality(),notified.cardinality(),unresolved.cardinality(),held.keySet().stream().mapToInt(Integer::intValue).toArray(),responseNs,success,fail,waitlisted.cardinality());}
     }
     final Shared.Config cfg;final List<Client> clients=new ArrayList<>();final AtomicReference<String> failure=new AtomicReference<>();
     final long deadline=System.nanoTime()+TimeUnit.MINUTES.toNanos(90);
@@ -114,7 +115,7 @@ public final class BookingClients {
                 FinalState finalState=state.snapshot();int pending=Integer.parseInt(p[2]);
                 if(sent!=cfg.requests||finalState.responses()!=cfg.requests||finalState.unresolved()!=pending)throw new IOException("BYE counts mismatch");
                 log.event("PROTOCOL","SUCCESS","type=BYE client="+id+" unresolved="+pending);
-                log.event("STAT","INFO","type=FINAL client="+id+" sent="+sent+" firstResponses="+finalState.responses()+" notify="+finalState.notifications()+" unresolved="+finalState.unresolved()+" held="+Shared.csv(finalState.held())+" responseNs="+finalState.responseNs());
+                log.event("STAT","INFO","type=FINAL client="+id+" sent="+sent+" firstResponses="+finalState.responses()+" success="+finalState.success()+" fail="+finalState.fail()+" waitlisted="+finalState.waitlisted()+" meanResponseMs="+String.format(Locale.ROOT,"%.6f",finalState.responseNs()/1_000_000.0/finalState.responses())+" notify="+finalState.notifications()+" unresolved="+finalState.unresolved()+" held="+Shared.csv(finalState.held())+" responseNs="+finalState.responseNs());
                 log.event("TERMINATE","SUCCESS","execution=COMPLETE client="+id);done=true;
             } else throw new IOException("Unexpected server frame: "+Shared.clean(line));
         }
