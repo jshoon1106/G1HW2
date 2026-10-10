@@ -265,18 +265,9 @@ POOL 검증 범위: 현재 LogVerifier는 기록 존재와 각 기록의 내용�
 Step 7 — 종료·정합성: Request Queue·Notify Queue와 처리 중 요청·미완료 통지를 모두 정리한 후 BYE를 송신하고 100석 FINAL_SEAT·SUMMARY·TERMINATE를 기록했다. 30개 Client의 종료·최종 보유 기록과 31개 로그의 사후 PASS를 확인했다. 배정−해제=점유, Server owner=Client 보유, WAITLISTED=NOTIFY+미해결의 세 정합성 식은 8-1의 실측값과 일치한다.
 
 9. 제출 파일 (제출 시 삭제)
-제출 파일: G1HW2.zip / 조별 1명 / 마감 2026-10-12 23:59 KST
-내용: 전체 src, project.ps1, seat-booking.jar, Readme.txt, AllDefinedLogs.txt, download.txt, Server.txt, Client1~30.txt
+제출 파일: G1HW2.zip / 조별 1명 / 최종 업로드 전 실제 제출 시스템의 용량 제한 확인
+내용: 전체 src, project.ps1, run-client.cmd, seat-booking.jar, Readme.txt, AllDefinedLogs.txt, download.txt, Server.txt, Client1~30.txt
 로그: 단일 원격 final 회차 전체 31개 / ZIP 루트 배치
-제외: tests·secrets·known_hosts·temp·out·개발/실패 로그
+최신 정식 회차 사후 검증 포함 31개 로그 129498450 bytes(약 129.50MB, 10진 MB). 실행 중 로그 회전·이벤트 삭제 없음
 영상: G1HW2.mp4, 5분 이내 / download.txt의 다운로드 가능한 HTTPS 링크
 영상 확인: 공유 권한·다운로드·재생
-제출 파일은 별도 압축 도구로 ZIP 생성 후 새 폴더에 해제하여 파일 구성·컴파일·실행을 확인
-
-10. 로그 용량·시연 정책
-최신 정식 회차 사후 검증 포함 31개 로그 129498450 bytes(약 129.50MB, 10진 MB). 실행 중 로그 회전·이벤트 삭제 없음
-제출 압축: 전체 원본 텍스트 로그를 ZIP으로 압축, 최종 업로드 전 실제 제출 시스템의 용량 제한 확인
-시연 구성안: 원격 Server와 로컬 Client 실행 명령·연결, 인기 좌석 경합·다중 예약 Lock 순서·FIFO 통지, 최종 요약과 정합성 PASS 확인
-시연에서 짧은 dev 회차를 사용하면 영상에 개발 설정을 표시; 제출 로그는 별도 정식 30x5000건 회차 사용
-별도 시연 회차는 새 Server 프로세스·새 runId로 시작하여 좌석을 EMPTY로 초기화
-현재 영상 상태: download.txt 없음; 5분 이내 G1HW2.mp4의 다운로드·공유 권한·재생 확인 후 링크 작성 필요
