@@ -6,7 +6,7 @@ G1HW2 — Thread Pool 기반 좌석 예매 시스템
 김현중 20223099: 시연 영상
 
 2. 환경
-개발·기존 실측: Windows / JDK 17 / PowerShell 7
+개발·정식 실측: Windows / JDK 17 / PowerShell 7
 실행 도구: project.ps1 사용 시 Java 17 이상과 PowerShell 7 필요; 직접 Java 명령으로 실행할 때는 Java 17 이상만 필요
 소스 빌드: JDK 17 이상(java·javac·jar); project.ps1의 Build 사용 시 PowerShell 7도 필요
 도구 경로: PATH에서 검색
@@ -27,6 +27,7 @@ src/BookingClients.java: 독립 Client 30개, 송수신, 요청 생성, 보유 �
 src/SeatStore.java: 100석, 좌석별 Lock, FIFO Waitlist, 예약·취소
 src/Shared.java: 설정, 자료형, 프레임 파서, 송신, 로그, Queue/CV
 src/LogVerifier.java: Server·Client 로그의 독립 대조
+analyze-pool.ps1: PowerShell 7 기반 읽기 전용 POOL 주기 진단
 project.ps1: 환경 확인·빌드·실행·TCP 로그 수집·검증
 run-client.cmd: 실행하는 Windows PC에서 Client 30개를 시작하여 원격 Server에 접속하는 실행 파일
 
@@ -193,7 +194,7 @@ Client 송수신: 송신 Thread는 첫 응답·NOTIFY를 기다리지 않고 다
 정상 종료: 전체 첫 응답 송신·Queue drain → 남은 통지 완료 → BYE → 최종 좌석·통계 → Socket close → CV close/signalAll → Thread join → 로그 close
 Client 종료: 5000건 송신과 첫 응답 수신 완료 후 BYE까지 연결 유지, 종료 시 통지 수·최종 보유 좌석·미해결 수 기록
 미해결 Waitlist: 오류 제외, 잔여 건수 기록
-송신 완료의 의미: OS 버퍼에 프레임 전달, 실제 Client 수신·전체 정합성은 로그 대조로 확인
+송신 완료의 의미: 서버 completed·firstResponses는 전체 첫 응답 프레임을 TCP 스택에 기록한 건수이며, 상대 애플리케이션의 수신 확인은 아니다. Client RESPONSE는 수신 완료 기록이다. 검증기는 동일한 (Client ID, Request ID)의 양쪽 요청·응답을 대조하여 누락·중복·불일치를 확인한다.
 회차 실패 조건: 식별된 Client의 BYE 전 연결 단절·예외·한도 위반·시간 초과
 실패 후 재실행: 원본 로그 보존, 원격 Server 대기 상태 복구 후 새 runId 사용
 실행 시간 제한: 식별 전 HELLO 대기 10초, 전체 Client 등록 60초, 메시지 송신 30초, 전체 회차 90분
@@ -224,50 +225,77 @@ Lock 경합: 좌석 tryLock 실패 횟수
 최종 정합성: 전체 로그 대조 PASS/FAIL
 
 8-1. 실측 결과
-최신 정식 run: final-current-20261010-133640-862b7556
-실행: 2026-10-10 13:50:26 KST 시작, Server 종료 14:41:17, 자동 수집·검증 완료 14:41:53
-구성: 이 PC의 Windows 11 Client 30개 → Amazon Linux EC2 13.211.23.109:5000 / 30x5000건, 200~1000ms
-종료: Server TERMINATE SUCCESS, Client 실행·자동 수집·검증 코드 0 / 동일 회차 전체 31개 로그 대조 PASS
+최신 정식 run: final-20261011-150558-1be5f40252144773
+실행 날짜: 2026-10-11 KST. Server INIT 15:05:59.289, 정상 종료 15:57:10.406, 사후 검증 15:57:31.015
+구성: Windows 11 Client 30개 → Amazon Linux EC2 13.211.23.109:5000 / 30x5000건, 200~1000ms
+종료: Server·Client TERMINATE SUCCESS / 동일 회차 전체 31개 로그의 scope=global result=PASS
+최종 이중예약 및 정합성 판정은 서버와 30개 클라이언트, 총 31개 로그에 기록된 VERIFIER | VERIFY의 scope=global 결과로 확인한다. 서버 종료 시의 DOUBLE_BOOKING_CHECK는 1차 수지 검사이며, PENDING은 사후 로그 검증 전 상태를 의미한다.
+balance=PASS만으로 이중예약 0건을 확정하지 않는다. 최종 기록의 result=PASS, doubleBooking=0, consistency=PASS를 함께 확인한다.
 JAR SHA-256: 1057b16f0817f7d0c17a99f2cde363b3243b45be0d0acd19b70c2ba979d3fd5f
-버전 확인: 현재 로컬 JAR 및 Server·Client INIT SHA-256 일치; Server Linux, Client Windows_11
+버전 확인: 제출 JAR 및 Server·Client INIT SHA-256 일치; Server Linux, Client Windows_11
 
 지표                    | 실측값         | 측정·확인 위치
 ------------------------|----------------|-----------------------------
-전체 처리량             | 49.224102건/s  | Server, 경과 3047.287701439s
-평균 응답시간           | 210.917906ms   | 30개 Client 첫 응답 시간
-Request Queue 최대 길이 | 5건            | Queue Lock 내부 최대값
+전체 처리량             | 48.858296건/s  | Server, 경과 3070.103003534s
+평균 응답시간           | 208.621337ms   | 30개 Client 첫 응답 시간
+Request Queue 최대 길이 | 6건            | Queue Lock 내부 최대값
 이중예약                | 0건            | 좌석 전이·최종 보유 대조
 Deadlock/진행 정체       | 0회            | Monitor·완료 로그
-Waitlist 평균 대기시간  | 66.663797s     | 완료 NOTIFY 11593건
-좌석 Lock 경합          | 19회           | tryLock 실패 합계
+Waitlist 평균 대기시간  | 68.258084s     | 완료 NOTIFY 11450건
+좌석 Lock 경합          | 65회           | tryLock 실패 합계
 최종 좌석 정합성        | PASS           | Server·Client 로그 대조
 
-첫 응답: 150000=SUCCESS 36881(24.587%)+FAIL 101226(67.484%)+WAITLISTED 11893(7.929%) / Client별 송신·응답 각 5000
-좌석 수지: 배정 24409−해제 24380=점유 29 / 100석 Server owner·30개 Client 최종 보유 일치·중복 보유 없음
-대기 수지: WAITLISTED 11893=NOTIFY 11593+미해결 300 / 인기 좌석 인자 75.9911%
-개별 Client1: 5000건=SUCCESS 1271+FAIL 3330+WAITLISTED 399, 평균 응답 202.652027ms, NOTIFY 386, 미해결 13
-로그 위치: logs/final-current-20261010-133640-862b7556/Server.txt 및 Client1~30.txt, 총 31개·129498450 bytes
+첫 응답: 150000=SUCCESS 36804+FAIL 101461+WAITLISTED 11735 / Client별 송신·응답 각 5000
+좌석 수지: 배정 24309−해제 24283=점유 26 / 100석 Server owner·30개 Client 최종 보유 일치·중복 보유 없음
+대기 수지: WAITLISTED 11735=NOTIFY 11450+미해결 285 / 인기 좌석 인자 75.9179%(검증 로그의 반올림 비율)
+개별 Client1: 5000건=SUCCESS 1222+FAIL 3386+WAITLISTED 392, 평균 응답 206.760167ms, NOTIFY 382, 미해결 10
+개발 폴더 로그 위치: logs/final-20261011-150558-1be5f40252144773/Server.txt 및 Client1~30.txt
+제출 ZIP 로그 위치: 압축 해제 폴더 루트의 Server.txt 및 Client1~30.txt
+전체 31개 로그: 129670315 bytes(약 129.67MB, 10진 MB), 사후 검증 기록 포함
 최종 지표·정합성 기록: 31개 파일 끝의 scope=global result=PASS 및 각 Client의 scope=client result=PASS
-로그 수집: 원격 원본 Server.txt 73983314 bytes를 TCP로 받아 SHA-256 확인; 로컬 검증 후 원본을 보존하며 사후 기록 추가
-실행 상태: out/final-current-20261010-133640-862b7556/execution.json의 state=completed, exitCode=0
-현재 제출 기준: 위 최신 정식 회차와 현재 JAR를 사용
+수집된 원격 Server.txt는 73904660 bytes이며 SHA-256 확인 후 저장되었다. 사후 검증 기록이 포함된 제출 Server.txt는 73905139 bytes이다.
+현재 제출 기준: 위 최신 정식 회차와 기존 JAR를 사용한다. 문서·별도 분석 도구 보강을 위해 Java·JAR·정식 로그를 변경하거나 부하 테스트를 재실행하지 않는다.
 
 8-2. 공식 시나리오와 최신 실측 대조
-확인 대상: 위 최신 정식 회차의 Server.txt·Client1~30.txt. 명세의 Step 3~5는 부하 테스트 중 반복 발생하며, 예시에 나온 Client 번호·좌석 조합·시각을 고정하여 재현하는 실행은 아니다.
-Step 1 — 원격 Server 초기화: SeatStore 생성 시 100석 owner=0(EMPTY), 빈 Waitlist로 초기화한다. Server INIT의 seats=100·workers=10 및 READY의 appThreads=13을 확인했다. 대기 실행에서는 첫 유효 HELLO 이후 회차 INIT를 기록한다.
-Step 2 — 로컬 Client 접속: Windows 11의 Client 1~30 각각에 대응하는 Server HELLO 기록과 Client INIT·CONNECT를 확인했다. 각 Client는 연결 후 전체 접속 장벽 없이 요청을 시작했다.
-Step 3 — 단일 예약·Race Condition 검증: RESERVE 88690건. 13:50:29.375 Client17 req=1과 13:50:29.376 Client29 req=1의 좌석 5 요청 등 인기 좌석 집중 요청을 확인했다. 좌석별 seq 전이를 재생하여 EMPTY에서만 배정, 이미 점유한 좌석의 중복 배정 없음과 최종 보유 일치를 확인했다.
-Step 4 — 다중 예약·Deadlock 회피 검증: RESERVE_MULTI 36930건. 13:50:30.752 Client1 req=2 [1,63,50]과 13:50:30.753 Client8 req=3 [1,8] 등 겹치는 조합의 요청을 확인했다. LOCK 기록의 획득 순서는 모두 오름차순이며, 로그 전체 대조에서 성공 시 전체 배정·실패 시 변경 없음과 진행 정체 0회를 확인했다.
-요청 접수 시각은 근접 요청의 근거이며 실제 Lock 보유 구간의 동시성을 나타내지는 않는다. 좌석 상태의 정당성은 좌석별 seq와 요청·응답 대조로 확인한다.
-Step 5 — 취소·FIFO 통지: CANCEL 24380건, HANDOFF·Server NOTIFY·Client NOTIFY 각 11593건. 예를 들어 13:50:30.032 Client4 req=2의 좌석 3 취소가 Client27 req=1로 직접 인계되었다. 등록 순서와 배정 순서의 FIFO 및 통지 요청 번호 일치는 전체 로그 재생으로 확인했다.
-Step 6 — 정식 부하: 30개 Client의 SEND·RESPONSE 각 5000건, 전체 150000건. 선택 대기시간 delayMs의 실제 범위는 200~1000ms이며 인기 좌석(1~10번) 인자 비율은 75.9911%였다. 5초 주기를 목표로 한 POOL은 607회, 로그 시각 기준 인접 기록 간격은 4.988~5.707초였으며 각 기록에 100석 현황·Queue 길이·누적 첫 응답이 포함된다.
-POOL 검증 범위: 현재 LogVerifier는 기록 존재와 각 기록의 내용을 검사하며 모든 5초 구간의 누락 여부까지 자동 검사하지 않는다. 위 주기 관측값은 원본 POOL 기록을 별도로 대조한 결과이다.
-Step 7 — 종료·정합성: Request Queue·Notify Queue와 처리 중 요청·미완료 통지를 모두 정리한 후 BYE를 송신하고 100석 FINAL_SEAT·SUMMARY·TERMINATE를 기록했다. 30개 Client의 종료·최종 보유 기록과 31개 로그의 사후 PASS를 확인했다. 배정−해제=점유, Server owner=Client 보유, WAITLISTED=NOTIFY+미해결의 세 정합성 식은 8-1의 실측값과 일치한다.
+확인 대상: 8-1과 동일한 2026-10-11 회차. 아래 예시는 해당 Server.txt의 실제 이벤트이며 고정 시나리오를 별도로 실행한 결과가 아니다.
+Step 1 — 원격 Server 초기화: 100석 owner=0(EMPTY), 빈 Waitlist로 초기화. INIT의 seats=100·workers=10 및 READY의 appThreads=13을 확인했다.
+Step 2 — 로컬 Client 접속: Client 1~30의 Server HELLO와 Client INIT·CONNECT 기록이 존재한다. 각 Client는 연결 후 전체 접속 장벽 없이 요청을 시작한다.
+Step 3 — 단일 예약·Race Condition 검증: RESERVE 88808건. 예: 15:05:59.478 Client25 req=1, 좌석 10. 좌석별 seq 재생으로 EMPTY에서만 배정되었는지와 최종 보유 일치를 검증했다.
+Step 4 — 다중 예약·Deadlock 회피 검증: RESERVE_MULTI 36909건. 예: 15:05:59.478 Client22 req=1, 좌석 [8,10]. LOCK의 오름차순과 성공 시 전체 배정·실패 시 변경 없음, 진행 정체 0회를 검증했다.
+위 두 예시는 같은 기록 시각에 좌석 10을 포함한 요청이 접수된 사례다. 접수 시각은 실제 Lock 보유 구간의 동시성을 증명하지 않으며, 좌석 상태의 정당성은 seq와 요청·응답 대조로 확인한다.
+Step 5 — 취소·FIFO 통지: CANCEL 24283건, HANDOFF·Server NOTIFY·Client NOTIFY 각 11450건. 15:06:00.219 Client4 req=2의 좌석 3 취소가 15:06:00.221 Client27 req=1로 직접 인계되었다. 전체 이력의 FIFO와 통지 요청 번호를 검증했다.
+Step 6 — 정식 부하: Client별 SEND·RESPONSE 각 5000건, 전체 150000건. delayMs 범위 200~1000ms. 인기 좌석(1~10번) 비율 75.9179%. POOL 612개, 인접 간격 611개, 최소 4988ms·최대 5348ms·중앙값 5015ms, 6000ms 초과 0개이다.
+Step 7 — 종료·정합성: 요청·통지 처리 완료 후 BYE, 100석 FINAL_SEAT, SUMMARY, TERMINATE 기록을 확인했다. 30개 Client의 최종 보유와 전체 로그의 최종 PASS를 대조했다. 세 수지 검사의 값은 8-1과 같다.
 
-9. 제출 파일 (제출 시 삭제)
-제출 파일: G1HW2.zip / 조별 1명 / 최종 업로드 전 실제 제출 시스템의 용량 제한 확인
-내용: 전체 src, project.ps1, run-client.cmd, seat-booking.jar, Readme.txt, AllDefinedLogs.txt, download.txt, Server.txt, Client1~30.txt
-로그: 단일 원격 final 회차 전체 31개 / ZIP 루트 배치
-최신 정식 회차 사후 검증 포함 31개 로그 129498450 bytes(약 129.50MB, 10진 MB). 실행 중 로그 회전·이벤트 삭제 없음
-영상: G1HW2.mp4, 5분 이내 / download.txt의 다운로드 가능한 HTTPS 링크
-영상 확인: 공유 권한·다운로드·재생
+8-3. 독립 POOL 주기 진단 (PowerShell 7 필요)
+개발 폴더에서:
+  pwsh -NoProfile -File ./analyze-pool.ps1 -ServerLog ./logs/final-20261011-150558-1be5f40252144773/Server.txt
+제출 ZIP 압축 해제 폴더에서:
+  pwsh -NoProfile -File ./analyze-pool.ps1 -ServerLog ./Server.txt
+예상 출력: poolSamples=612, poolIntervals=611, poolMinGapMs=4988, poolMaxGapMs=5348, poolMedianGapMs=5015, poolLongGaps=0, warningThresholdMs=6000, poolParseErrors=0, poolAmbiguousIntervals=0, poolMidnightRollovers=0, poolDiagnostic=PASS
+이 스크립트는 로그를 읽기만 하며 LogVerifier 실행·로그 수정·JAR 재빌드를 하지 않는다.
+서버는 System.nanoTime()으로 주기를 관리하지만 본 분석은 wall-clock HH:mm:ss.SSS 기록을 사용하므로 기록 지연·벽시계 보정의 영향을 받는다.
+첫 연결→첫 POOL 및 마지막 POOL→종료 구간은 진단 대상에서 제외한다. 인접 POOL 기록 사이만 계산한다.
+판정 우선순위: 시각 파싱 실패 FAIL → 기록 0~1개 INSUFFICIENT_DATA → 간격 수 불일치 FAIL → 모호한 역행·0ms 간격 또는 긴 간격 WARN → 나머지 PASS.
+PASS 조건: 2개 이상 기록, 전체 시각 파싱 성공, poolIntervals=poolSamples−1, 해석 불가/비정상 간격 없음, poolLongGaps=0.
+poolLongGaps는 gap > warningThresholdMs(기본 6000)인 횟수이며 정확히 6000ms는 정상 범위다. 이 기준은 과제 합격 기준이 아닌 독립 진단 기준이다.
+23:59분→00:00분의 역행만 명백한 자정 경계로 가정하여 24시간을 더한다. 날짜가 없으므로 이 경우에도 시계 보정과 완전히 구별할 수 없다. 다른 역행·0ms는 원인을 확정하지 않고 WARN으로 보고한다.
+역행·0ms도 관측 간격 통계에 포함하며 poolAmbiguousIntervals로 별도 집계한다. 파싱 실패 양옆의 간격은 계산하지 않는다.
+poolDiagnostic=PASS는 주기 진단만 의미한다. 기존 LogVerifier의 최종 정합성 판정을 변경하거나 대신하지 않는다.
+프로세스 종료 코드: PASS=0, FAIL=1, WARN=2, INSUFFICIENT_DATA=3. 파일 접근 실패는 PowerShell 오류로 보고한다.
+기존 LogVerifier는 POOL 내용과 존재를 검사하며 전체 주기를 자동 검사하지 않는다.
+
+9. 제출 구성과 압축 해제 후 확인
+최종 제출명: G1HW2.zip / 조별 1명 / 업로드 전 제출 시스템 용량 제한 확인
+내용: 전체 src, project.ps1, run-client.cmd, seat-booking.jar, Readme.txt, AllDefinedLogs.txt, analyze-pool.ps1, download.txt, Server.txt, Client1~30.txt
+로그: 10월 11일 단일 원격 final 회차 전체 31개를 ZIP 루트에 배치. 129670315 bytes. 이전 회차·.git·임시 파일·실행 파일 복사본 제외.
+영상: G1HW2.mp4, 5분 이내. download.txt에 실제 다운로드 링크가 필요하며 공유 권한·다운로드·재생을 확인한다.
+현재 상태: 영상 링크 미확보로 download.txt 미포함. G1HW2-preparation.zip은 검증용 준비본이며 최종 제출본이 아니다.
+압축 해제 폴더에서 환경 확인:
+  pwsh -NoProfile -File ./project.ps1 -Action Check
+읽기 전용 POOL 진단은 8-3의 제출 ZIP 명령을 사용한다.
+정합성 재검증은 원본 보존을 위해 새 검증 디렉터리에 Server.txt 및 Client1~30.txt를 복사한 뒤 수행한다:
+  java -cp seat-booking.jar LogVerifier --log-dir VERIFICATION_COPY_DIR --profile final
+VERIFICATION_COPY_DIR는 새로 만든 로그 복사본 폴더의 실제 경로로 교체한다.
+LogVerifier는 첫 VERIFIER | VERIFY 행부터의 사후 기록을 교체한다. 재실행 시 Server는 global 1개, 각 Client는 client 1개+global 1개를 유지하며 기존 기록에 중복 추가하지 않는다.
+원본 소스·JAR·로그의 SHA-256을 압축 전후 대조하고 재검증 뒤에도 원본과 ZIP 내부 파일의 해시가 동일한지 확인한다.

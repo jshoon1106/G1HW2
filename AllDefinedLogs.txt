@@ -53,7 +53,10 @@ POOL / INFO
 
 DOUBLE_BOOKING_CHECK / INFO
   scope=server_final, balance=PASS, client_log_verification=PENDING
-  Server 최종 배정·해제 수지 검사 / 전체 Client 정합성은 사후 검증
+  서버 종료 시 배정 수−해제 수=최종 점유 수를 확인하는 1차 검사.
+  balance=PASS만으로 이중예약 0건이나 전체 정합성을 확정하지 않는다.
+  PENDING은 사후 전체 로그 검증 전 상태이며 오류가 아니다.
+  최종 판정은 31개 로그의 VERIFIER | VERIFY, scope=global에서 확인한다.
 
 TERMINATE / SUCCESS·FAIL
   SUCCESS: execution=COMPLETE / 정상 종료
@@ -73,6 +76,8 @@ RESPONSE / SUCCESS·FAIL·INFO
   client, req, op, seats, result, reason, states / 첫 응답 내용
   Client 추가: elapsedNs / 송신 직전~첫 응답 수신의 경과시간
   Server: 전체 응답 프레임 송신 후 기록 / WAITLISTED의 STATUS는 INFO
+  서버 completed·firstResponses는 TCP 스택으로 프레임 기록 완료 수이며 상대 애플리케이션의 수신 확인이 아니다.
+  Client RESPONSE는 수신 완료 기록이다. 검증기는 같은 (Client ID, Request ID)의 양쪽 요청·응답을 대조한다.
 
 AUDIT / INFO
   client, req, op, seats, seat, seq, before, after, version, action, waitClient, waitReq
@@ -123,7 +128,9 @@ VERIFY / SUCCESS·FAIL
   meanResponseMs: 30개 Client의 첫 응답 경과시간 합계 ÷ 전체 첫 응답 수 ÷ 1,000,000, 단위 ms
   hotRatio: 전체 요청의 좌석 인자 중 1~10번 인자 수 ÷ 전체 좌석 인자 수, 0~1의 비율; CANCEL 포함, MULTI의 각 좌석을 개별 집계
   Server.txt·Client1~30.txt에 전체 사후 결과 기록 / 원격 실행·첫 응답 집계에서 제외
-  SUCCESS: 31개 전체 로그 대조 PASS, 이중예약 0건 및 정합성 PASS 확정
+  SUCCESS: 좌석 전이·FIFO·다중 예약 원자성·요청/응답/통지·최종 보유·대기 수지의 31개 전체 로그 대조 완료.
+  scope=global result=PASS doubleBooking=0 consistency=PASS가 최종 이중예약·정합성 판정이다.
+  독립 analyze-pool.ps1의 poolDiagnostic은 주기 진단이며 이 판정을 변경하거나 대신하지 않는다.
   FAIL: result=FAIL, profile, run, error만 기록 / 미확정 성능 지표 생략
   재검증: 원래 실행 바이트 보존, 이전 사후 기록만 교체하여 오래된 PASS 잔존 방지
 
